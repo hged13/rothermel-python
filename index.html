@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Leaflet Map with Time Selector and Timeseries Plot</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.3.0/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.3.0/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/plotty@0.5.0/build/plotty.min.js"></script>
+    <script src="https://unpkg.com/leaflet-geotiff@1.0.0/dist/leaflet-geotiff.min.js"></script>
+    <script src="https://unpkg.com/leaflet-geotiff@1.0.0/dist/leaflet-geotiff.plotty.min.js"></script>
+    <script src="https://unpkg.com/georaster"></script>
+    <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script> <!-- Add Plotly.js -->
+    <script src="https://unpkg.com/leaflet.markercluster@1.3.0/dist/leaflet.markercluster.js"></script>
+
+
+    <style>
+        body {
+            display: flex;
+            flex-direction: row;
+        }
+        #map-container {
+            flex: 1;
+            height: 100vh;
+            overflow: auto;
+        }
+
+        #plot-container {
+            display: inline;
+            width: auto;
+            height: auto;
+            overflow: hidden;
+        }
+
+        #mapid {
+            height: 100%;
+        }
+        #controls-container, #legend-container, #controls-container2{
+            position: absolute;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+        #controls-container {
+            top: 10px;
+            left: 41%;
+            transform: translateX(-50%);
+        }
+        #controls-container2 {
+            top: 10px;
+            left: 78.0%;
+            transform: translateX(-50%);
+        }
+        #legend-container {
+            top: 10px;
+            right: 10px;
+            max-width: 200px;
+        }
+
+        #plot {
+            width: 700px; /* Adjust to the desired width */
+            height: 800px; /* Adjust to the desired height */
+        }
+        #close-button {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: red;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            padding: 5px;
+            cursor: pointer;
+        }
+        #adjust-y-axis, #reset-y-axis {
+            margin-top: 10px; /* Add some margin for better spacing */
+            padding: 5px;
+            background: blue;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .legend {
+            margin-top: 10px;
+        }
+        .legend img {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+    <!-- Map Container -->
+    <div id="map-container">
+        <!-- Controls for selecting time and toggling layers -->
+        <div id="controls-container">
+            <select id="daySelector"></select>
+            <select id="hourSelector"></select>
+            <button id="prevHour">Previous Hour</button>
+            <button id="nextHour">Next Hour</button>
+            <span id="timeValue">2021-04-01 00:00</span>
+            <label><input type="checkbox" id="togglePrecipitation" checked> Precipitation</label>
+            <label><input type="checkbox" id="toggleOuter" checked> Outer</label>
+            <label><input type="checkbox" id="toggleMean" checked> Mean</label>
+            <label><input type="checkbox" id="toggleMedian" checked> Median</label>
+        </div>
+        <div id="controls-container2">
+            
+            <button id="generateRaster">GenerateRaster</button>
+            <select id="FirstLayer"></select>
+            <select id="SecondLayer"></select>
+
+            
+        </div>
+        <!-- Legend display -->
+        <div id="legend-container">
+            <h4>Legend</h4>
+            <label><input type="checkbox" id="showPrecipitationLegend" checked> Precipitation Legend</label>
+            <div id="precipitationLegend" class="legend"></div>
+            <label><input type="checkbox" id="showOuterLegend" checked> Outer Legend</label>
+            <div id="outerLegend" class="legend"></div>
+            <label><input type="checkbox" id="showMeanLegend" checked> Mean Legend</label>
+            <div id="meanLegend" class="legend"></div>
+            <label><input type="checkbox" id="showMedianLegend" checked> Median Legend</label>
+            <div id="medianLegend" class="legend"></div>
+        </div>
+        <!-- Map display -->
+        <div id="mapid"></div>
+    </div>
+
+    <!-- Plot Container for timeseries data -->
+    <div id="plot-container" style="display:none;" >
+        <button id="close-button">Close</button>
+        <div id="plot"></div>
+        <button id="adjust-y-axis">Adjust Y-Axis</button> <!-- New button to adjust y-axis -->
+        <button id="reset-y-axis">Reset Y-Axis</button> <!-- New button to reset y-axis -->
+    </div>
+
+    <script>
+        // Initialize the map
+        var centerLat = 46.965260;
+        var centerLng = -109.533691;
+        var map = L.map('mapid').setView([centerLat, centerLng], 6);
+
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 100,
+        }).addTo(map);
+        
+
+        // Initialize the marker cluster group
+        var markers = L.markerClusterGroup();
+
+        // Access the stations data passed from Flask as a JavaScript variabl
+        var stations = JSON.parse('{{ stations | safe }}');     
+        console.log(stations);
+   
+        stations.forEach(function(station) {
+        // Print station info to the console
+            console.log('Station:', station);
+            if (station.LATITUDE && station.LONGITUDE && !isNaN(station.LATITUDE) && !isNaN(station.LONGITUDE)){
+                var marker = L.marker(new L.LatLng(station.LATITUDE, station.LONGITUDE));
+                marker.addTo(map);}
+        }
+        )
+       // map.addLayer(markers);
+
+        // Add the marker cluster group to the map
+
+        // Variables for different layers
+        var precipitationLayer, outerLayer, meanLayer, medianLayer;
+        var globalMaxY = 0;
+        var currentXRange = null;
+
+        // Function to add WMS layers to the map
+        // This will fetch the desired layer for the desired time from Geoserver
+        // where we have set up an image mosaic. 
+        function addWmsLayer(layerName, time) {
+            var layer;
+            var wmsOptions = {
+                format: 'image/png',
+                transparent: true,
+                version: '1.1.1',
+                maxZoom: 100,
+                time: time,
+                attribution: "GeoServer"
+            };
+
+            if (layerName == 'precipitation') {
+                if (precipitationLayer) map.removeLayer(precipitationLayer);
+                precipitationLayer = L.tileLayer.wms("http://localhost:8086/geoserver/wms", {
+                    ...wmsOptions,
+                    layers: 'Nelson:Precipitation2real'
+                }).addTo(map);
+                layer = precipitationLayer;
+            } else if (layerName == 'outer') {
+                if (outerLayer) map.removeLayer(outerLayer);
+                outerLayer = L.tileLayer.wms("http://localhost:8086/geoserver/wms", {
+                    ...wmsOptions,
+                    layers: 'Nelson:Outer2'
+                }).addTo(map);
+                layer = outerLayer;
+            } else if (layerName == 'mean') {
+                if (meanLayer) map.removeLayer(meanLayer);
+                meanLayer = L.tileLayer.wms("http://localhost:8086/geoserver/wms", {
+                    ...wmsOptions,
+                    layers: 'Nelson:Mean2'
+                }).addTo(map);
+                layer = meanLayer;
+            } else if (layerName == 'median') {
+                if (medianLayer) map.removeLayer(medianLayer);
+                medianLayer = L.tileLayer.wms("http://localhost:8086/geoserver/wms", {
+                    ...wmsOptions,
+                    layers: 'Nelson:Median2'
+                }).addTo(map);
+                layer = medianLayer;
+            }
+            return layer;
+        }
+
+        // Function to update the displayed time value
+        // Note that the time format (yyyydd'T'hh:mm:ss.sss'Z')
+        // Is required by geoserver.
+        function updateTimeValue() {
+            var selectedDay = document.getElementById('daySelector').value;
+            var selectedHour = document.getElementById('hourSelector').value;
+            var formattedDate = `${selectedDay} ${selectedHour}:00`;
+            document.getElementById('timeValue').textContent = formattedDate;
+            return `${selectedDay}T${selectedHour}:00:00.000Z`;
+        }
+
+        function GetTimeValue(){
+            var selectedDay = document.getElementById('daySelector').value;
+            var selectedHour = document.getElementById('hourSelector').value;
+            return `${selectedDay}T${selectedHour}:00:00.000Z`;
+
+        }
+
+        function GetFirstLayer(){
+            var firstlayer = document.getElementById('FirstLayer').value;
+            var timevalue = GetTimeValue();
+            var index = dateToHourIndex(timevalue);
+            console.log(index);// Output: 2
+            var granulestring = `Nelson__${firstlayer}2_granule_${firstlayer}2.${index}`;
+            console.log(granulestring);
+            return granulestring;
+            }
+
+        function GetSecondLayer(){
+            var secondlayer = document.getElementById('SecondLayer').value;
+            var timevalue = GetTimeValue();
+            var index = dateToHourIndex(timevalue);
+            console.log(index);// Output: 2
+            var granulestring = `Nelson__${secondlayer}2_granule_${secondlayer}2.${index}`;
+            console.log(granulestring);
+            return granulestring;
+            }
+
+
+        function dateToHourIndex(dateString) {
+        // Define the starting date
+            const startDate1 = new Date(Date.UTC(2021, 3, 1, 0, 0, 0));
+            console.log(startDate1)
+
+
+            const startDate = '2021-04-01T00:00:00.000Z';
+            const startYear = 2021;
+            const startMonth = 4;
+            const startDay = 1;
+            const startHour =0;
+            
+
+    
+            // Extract the date and time components from the input date string
+            const year = parseInt(dateString.substring(0, 4), 10);
+            console.log(year) // Output: 2
+
+            const month = parseInt(dateString.substring(5, 7), 10);
+            console.log(month) // Output: 2
+            // Months are 0-indexed in JavaScript
+            const day = parseInt(dateString.substring(8, 10), 10);
+            console.log(day) // Output: 2
+
+            const hour = parseInt(dateString.substring(12, 13), 10);
+            console.log(hour) // Output: 2
+
+            const inputDate = new Date(Date.UTC(year, (month-1), day, hour, 0, 0));
+
+            // Calculate the difference in milliseconds
+            const diffMs = inputDate - startDate1;
+            console.log(diffMs)
+    
+    // Convert the difference from milliseconds to hours
+            const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+            console.log(inputDate)
+            
+            console.log(diffHours)
+    
+    // Return the hour index (starting from 1)
+            return diffHours + 1;
+
+
+    
+           ;
+        }
+
+
+        // Function to update the hour selector dropdown
+        //includes functionality to update days when hours reach 24
+        function updateHourSelector() {
+            var hourSelector = document.getElementById('hourSelector');
+            hourSelector.innerHTML = '';
+            for (var i = 0; i < 24; i++) {
+                var hourOption = document.createElement('option');
+                hourOption.value = i.toString().padStart(2, '0');
+                hourOption.textContent = i.toString().padStart(2, '0') + ":00";
+                hourSelector.appendChild(hourOption);
+            }
+        }
+
+        // Function to update the day selector dropdown
+        // includes functionality to update month when needed.
+        function updateDaySelector() {
+            var daySelector = document.getElementById('daySelector');
+            daySelector.innerHTML = '';
+            var baseDate = new Date(2021, 3, 1); // Starting from April 1, 2021
+            for (var i = 0; i < 100; i++) { // Example: 100 days
+                var dayOption = document.createElement('option');
+                var date = new Date(baseDate);
+                date.setDate(baseDate.getDate() + i);
+                dayOption.value = date.toISOString().substring(0, 10);
+                dayOption.textContent = date.toISOString().substring(0, 10);
+                daySelector.appendChild(dayOption);
+            }
+        }
+
+           // Function to update the day selector dropdown
+        // includes functionality to update month when needed.
+        function updateLayerOneSelector() {
+            var layerSelector= document.getElementById('FirstLayer');
+            FirstLayer.innerHTML = '';
+            
+            var layer = document.createElement('option');
+            layer.value = "Precipitation"
+            layer.textContent = "Precipitation"
+            layerSelector.appendChild(layer);
+
+            var layer2 = document.createElement('option');
+            layer2.value = "Mean"
+            layer2.textContent = "Mean"
+            layerSelector.appendChild(layer2);
+
+            var layer3 = document.createElement('option');
+            layer3.value = "Median"
+            layer3.textContent = "Median"
+            layerSelector.appendChild(layer3);
+
+            var layer4 = document.createElement('option');
+            layer4.value = "Outer"
+            layer4.textContent = "Outer"
+            layerSelector.appendChild(layer4);
+            }
+
+        function updateLayerTwoSelector() {
+            var layerSelector= document.getElementById('SecondLayer');
+            SecondLayer.innerHTML = '';
+            
+            var layer = document.createElement('option');
+            layer.value = "Precipitation"
+            layer.textContent = "Precipitation"
+            layerSelector.appendChild(layer);
+
+            var layer2 = document.createElement('option');
+            layer2.value = "Mean"
+            layer2.textContent = "Mean"
+            layerSelector.appendChild(layer2);
+
+            var layer3 = document.createElement('option');
+            layer3.value = "Median"
+            layer3.textContent = "Median"
+            layerSelector.appendChild(layer3);
+
+            var layer4 = document.createElement('option');
+            layer4.value = "Outer"
+            layer4.textContent = "Outer"
+            layerSelector.appendChild(layer4);
+            }
+
+        // Function to update all layers based on the selected time and toggles
+        // This will trigger the fetching of new layers from geoserver
+        function updateLayers() {
+            var newTime = updateTimeValue();
+            var layers = [];
+            if (document.getElementById('togglePrecipitation').checked) {
+                layers.push(addWmsLayer('precipitation', newTime));
+            } else {
+                if (precipitationLayer) map.removeLayer(precipitationLayer);
+            }
+            if (document.getElementById('toggleOuter').checked) {
+                layers.push(addWmsLayer('outer', newTime));
+            } else {
+                if (outerLayer) map.removeLayer(outerLayer);
+            }
+            if (document.getElementById('toggleMean').checked) {
+                layers.push(addWmsLayer('mean', newTime));
+            } else {
+                if (meanLayer) map.removeLayer(meanLayer);
+            }
+            if (document.getElementById('toggleMedian').checked) {
+                layers.push(addWmsLayer('median', newTime));
+            } else {
+                if (medianLayer) map.removeLayer(medianLayer);
+            }
+            updateLegend(layers);
+        }
+
+        // Function to update the legend
+        function updateLegend(layers) {
+            var legendContainer = document.getElementById('legend-container');
+            var showPrecipitationLegend = document.getElementById('showPrecipitationLegend').checked;
+            var showOuterLegend = document.getElementById('showOuterLegend').checked;
+            var showMeanLegend = document.getElementById('showMeanLegend').checked;
+            var showMedianLegend = document.getElementById('showMedianLegend').checked;
+
+            legendContainer.innerHTML = '<h4>Legend</h4>';
+            legendContainer.innerHTML += `<label><input type="checkbox" id="showPrecipitationLegend" ${showPrecipitationLegend ? 'checked' : ''}> Precipitation Legend</label><div id="precipitationLegend" class="legend"></div>`;
+            legendContainer.innerHTML += `<label><input type="checkbox" id="showOuterLegend" ${showOuterLegend ? 'checked' : ''}> Outer Legend</label><div id="outerLegend" class="legend"></div>`;
+            legendContainer.innerHTML += `<label><input type="checkbox" id="showMeanLegend" ${showMeanLegend ? 'checked' : ''}> Mean Legend</label><div id="meanLegend" class="legend"></div>`;
+            legendContainer.innerHTML += `<label><input type="checkbox" id="showMedianLegend" ${showMedianLegend ? 'checked' : ''}> Median Legend</label><div id="medianLegend" class="legend"></div>`;
+
+            layers.forEach(function(layer) {
+                var layerName = layer.wmsParams.layers;
+                var legendUrl = `http://localhost:8086/geoserver/wms?REQUEST=GetLegendGraphic&VERSION=1.0.0&FORMAT=image/png&LAYER=${layerName}`;
+
+                if (layerName === 'Nelson:Precipitation2real' && showPrecipitationLegend) {
+                    document.getElementById('precipitationLegend').innerHTML = `<img src="${legendUrl}" alt="Legend for ${layerName}"><br>`;
+                } else if (layerName === 'Nelson:Outer2' && showOuterLegend) {
+                    document.getElementById('outerLegend').innerHTML = `<img src="${legendUrl}" alt="Legend for ${layerName}"><br>`;
+                } else if (layerName === 'Nelson:Mean2' && showMeanLegend) {
+                    document.getElementById('meanLegend').innerHTML = `<img src="${legendUrl}" alt="Legend for ${layerName}"><br>`;
+                } else if (layerName === 'Nelson:Median2' && showMedianLegend) {
+                    document.getElementById('medianLegend').innerHTML = `<img src="${legendUrl}" alt="Legend for ${layerName}"><br>`;
+                }
+            });
+
+            document.getElementById('showPrecipitationLegend').addEventListener('change', updateLayers);
+            document.getElementById('showOuterLegend').addEventListener('change', updateLayers);
+            document.getElementById('showMeanLegend').addEventListener('change', updateLayers);
+            document.getElementById('showMedianLegend').addEventListener('change', updateLayers);
+        }
+
+        // Event listeners for controls
+        // triggers updates when buttons are changed
+        document.getElementById('daySelector').addEventListener('change', updateLayers);
+        document.getElementById('hourSelector').addEventListener('change', updateLayers);
+
+        document.getElementById('prevHour').addEventListener('click', function() {
+            var hourSelector = document.getElementById('hourSelector');
+            if (hourSelector.selectedIndex > 0) {
+                hourSelector.selectedIndex -= 1;
+            } else {
+                var daySelector = document.getElementById('daySelector');
+                if (daySelector.selectedIndex > 0) {
+                    daySelector.selectedIndex -= 1;
+                    hourSelector.selectedIndex = 23;
+                }
+            }
+            updateLayers();
+        });
+
+        document.getElementById('nextHour').addEventListener('click', function() {
+            var hourSelector = document.getElementById('hourSelector');
+            if (hourSelector.selectedIndex < 23) {
+                hourSelector.selectedIndex += 1;
+            } else {
+                var daySelector = document.getElementById('daySelector');
+                if (daySelector.selectedIndex < daySelector.options.length - 1) {
+                    daySelector.selectedIndex += 1;
+                    hourSelector.selectedIndex = 0;
+                }
+            }
+            updateLayers();
+        });
+
+        document.getElementById('togglePrecipitation').addEventListener('change', updateLayers);
+        document.getElementById('toggleOuter').addEventListener('change', updateLayers);
+        document.getElementById('toggleMean').addEventListener('change', updateLayers);
+        document.getElementById('toggleMedian').addEventListener('change', updateLayers);
+
+
+        // This is where functionality for raster generation (raster algebra) starts
+
+        document.getElementById('generateRaster').addEventListener('click', function() {
+            GetFirstLayer();
+            var coverage1= GetFirstLayer()
+            var coverage2= GetSecondLayer()
+            fetch(`/process_raster?coverage1=${coverage1}&coverage2=${coverage2}`, {
+                method: 'POST',
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.url) {
+                    console.log('Received URL:', data.url);
+
+
+                    loadGeoTIFF(data.url);
+                } else {
+                    console.error('Error: GeoTIFF URL not found.');
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        });
+
+        function loadGeoTIFF(url) {
+            fetch(url)
+            .then(response => response.arrayBuffer())
+            .then(arrayBuffer => {
+                parseGeoraster(arrayBuffer).then(georaster => {
+                    console.log("georaster:", georaster);
+
+                    var layer = new GeoRasterLayer({
+                        georaster: georaster,
+                        opacity: 0.7,
+                        
+                        resolution: 64 // optional parameter for adjusting display resolution
+                        
+                        
+                    });
+                    layer.addTo(map);
+                    
+
+                });
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+
+        // Initialize selectors and layers
+        updateDaySelector();
+        updateHourSelector();
+        updateLayers();
+        updateLayerOneSelector();
+        updateLayerTwoSelector();
+
+
+
+        // Event listener for map clicks to fetch data and display plots
+        map.on('click', function(e) {
+            var lat = e.latlng.lat;
+            var lng = e.latlng.lng;
+            var time = updateTimeValue();
+
+            // Store the current x-range
+            var plotDiv = document.getElementById('plot');
+            if (plotDiv && plotDiv.layout && plotDiv.layout.xaxis && plotDiv.layout.xaxis.range) {
+                currentXRange = plotDiv.layout.xaxis.range;
+            }
+
+            // Fetch all data
+            fetch(`/get_all_data?lat=${lat}&lng=${lng}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error('Error:', data.error);
+                        return;
+                    }
+                    document.getElementById('plot-container').style.display = 'block';
+
+                    // Process and plot Precipitation data
+                    var precip_times = data.precipitation.times.map(time => formatTimestamp(time));
+                    var precip_values = data.precipitation.values;
+                    var precipData = {
+                        x: precip_times,
+                        y: precip_values,
+                        type: 'scatter',
+                        mode: 'markers',
+                        marker: { color: 'blue' },
+                        name: 'Precipitation'
+                    };
+
+                    // Process and plot Outer data
+                    var outer_times = data.outer.times.map(time => formatTimestamp(time));
+                    var outer_values = data.outer.values;
+                    var outerData = {
+                        x: outer_times,
+                        y: outer_values,
+                        type: 'scatter',
+                        mode: 'markers',
+                        marker: { color: 'red' },
+                        name: 'Outer'
+                    };
+
+                    // Process and plot Mean data
+                    var mean_times = data.mean.times.map(time => formatTimestamp(time));
+                    var mean_values = data.mean.values;
+                    var meanData = {
+                        x: mean_times,
+                        y: mean_values,
+                        type: 'scatter',
+                        mode: 'markers',
+                        marker: { color: 'green' },
+                        name: 'Mean'
+                    };
+
+                    // Process and plot Median data
+                    var median_times = data.median.times.map(time => formatTimestamp(time));
+                    var median_values = data.median.values;
+                    var medianData = {
+                        x: median_times,
+                        y: median_values,
+                        type: 'scatter',
+                        mode: 'markers',
+                        marker: { color: 'purple' },
+                        name: 'Median'
+                    };
+
+                    // Combine all traces
+                    var timeseriesData = [precipData, outerData, meanData, medianData];
+
+                    // Calculate the global maximum y-value
+                    globalMaxY = Math.max(
+                        ...precip_values,
+                        ...outer_values,
+                        ...mean_values,
+                        ...median_values
+                    );
+
+                    // Plotly for data visualization
+                    Plotly.newPlot('plot', timeseriesData, {
+                        title: 'Timeseries Data',
+                        xaxis: {
+                            title: 'Time',
+                            rangeslider: {},
+                            type: 'date',
+                            range: currentXRange // Apply the stored x-range
+                        },
+                        yaxis: { title: 'Value' },
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching data:', error);
+                });
+            });
+
+            // Helper function to format timestamp
+            function formatTimestamp(time) {
+                let year = time.slice(0, 4);
+                let month = time.slice(4, 6);
+                let day = time.slice(6, 8);
+                let hour = time.slice(8, 10);
+                return `${year}-${month}-${day}T${hour}:00:00`;
+            }
+
+            // Function to adjust the y-axis based on the current x-range
+            document.getElementById('adjust-y-axis').addEventListener('click', function() {
+                var plotDiv = document.getElementById('plot');
+                var xRange = plotDiv.layout.xaxis.range;
+
+                var filteredData = plotDiv.data.map(trace => {
+                    return trace.y.filter((value, index) => {
+                        var xValue = new Date(trace.x[index]).getTime();
+                        return xValue >= new Date(xRange[0]).getTime() && xValue <= new Date(xRange[1]).getTime();
+                    });
+                });
+
+                var maxY = Math.max(...filteredData.map(arr => Math.max(...arr)));
+
+                Plotly.relayout('plot', {
+                    'yaxis.range': [0, maxY]
+                });
+            });
+
+            // Function to reset the y-axis to the global maximum y-value
+            document.getElementById('reset-y-axis').addEventListener('click', function() {
+                Plotly.relayout('plot', {
+                    'yaxis.range': [0, globalMaxY]
+                });
+            });
+    </script>
+</body>
+</html>
